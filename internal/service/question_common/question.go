@@ -409,8 +409,8 @@ func (qs *QuestionCommon) FormatQuestionsPage(
 			}
 		}
 
-		// if order condition is newest or nobody edited or nobody answered, only show question author
-		if orderCond == schema.QuestionOrderCondNewest || (!haveEdited && !haveAnswered) {
+		// If the order condition is not active or no one has edited/answered, display only the question author
+		if orderCond != schema.QuestionOrderCondActive || (!haveEdited && !haveAnswered) {
 			t.OperationType = schema.QuestionPageRespOperationTypeAsked
 			t.OperatedAt = questionInfo.CreatedAt.Unix()
 			t.Operator = &schema.QuestionPageRespOperator{ID: questionInfo.UserID}
