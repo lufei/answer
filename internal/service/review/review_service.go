@@ -165,10 +165,6 @@ func (cs *ReviewService) AddCommentReview(ctx context.Context,
 	reviewContent.Author = cs.getReviewContentAuthorInfo(ctx, comment.UserID)
 	reviewStatus := cs.callPluginToReview(ctx, comment.UserID, comment.ID, reviewContent)
 	switch reviewStatus {
-	case plugin.ReviewStatusApproved:
-		commentStatus = entity.CommentStatusAvailable
-	case plugin.ReviewStatusNeedReview:
-		commentStatus = entity.CommentStatusPending
 	case plugin.ReviewStatusDeleteDirectly:
 		commentStatus = entity.CommentStatusDeleted
 	default:

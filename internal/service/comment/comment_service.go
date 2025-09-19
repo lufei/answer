@@ -177,7 +177,7 @@ func (cs *CommentService) AddComment(ctx context.Context, req *schema.AddComment
 	resp.MemberActions = permission.GetCommentPermission(ctx, req.UserID, resp.UserID,
 		time.Now(), req.CanEdit, req.CanDelete)
 
-	if comment.Status != entity.CommentStatusDeleted {
+	if comment.Status == entity.CommentStatusAvailable {
 		commentResp, err := cs.addCommentNotification(ctx, req, resp, comment, objInfo)
 		if err != nil {
 			return commentResp, err
