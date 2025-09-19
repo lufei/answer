@@ -153,6 +153,30 @@ func (cs *ReviewService) AddAnswerReview(ctx context.Context,
 	return answerStatus
 }
 
+// AddCommentReview add review for comment if needed
+func (cs *ReviewService) AddCommentReview(ctx context.Context,
+	comment *entity.Comment, ip, ua string) (commentStatus int) {
+	reviewContent := &plugin.ReviewContent{
+		ObjectType: constant.CommentObjectType,
+		Content:    comment.ParsedText,
+		IP:         ip,
+		UserAgent:  ua,
+	}
+	reviewContent.Author = cs.getReviewContentAuthorInfo(ctx, comment.UserID)
+	reviewStatus := cs.callPluginToReview(ctx, comment.UserID, comment.ID, reviewContent)
+	switch reviewStatus {
+	case plugin.ReviewStatusApproved:
+		commentStatus = entity.CommentStatusAvailable
+	case plugin.ReviewStatusNeedReview:
+		commentStatus = entity.CommentStatusPending
+	case plugin.ReviewStatusDeleteDirectly:
+		commentStatus = entity.CommentStatusDeleted
+	default:
+		commentStatus = entity.CommentStatusAvailable
+	}
+	return commentStatus
+}
+
 // get review content author info
 func (cs *ReviewService) getReviewContentAuthorInfo(ctx context.Context, userID string) (author plugin.ReviewContentAuthor) {
 	user, exist, err := cs.userCommon.GetUserBasicInfoByID(ctx, userID)

@@ -21,7 +21,10 @@ package comment
 
 import (
 	"context"
+
 	"github.com/apache/answer/internal/service/event_queue"
+	"github.com/apache/answer/internal/service/review"
+
 	"time"
 
 	"github.com/apache/answer/internal/base/constant"
@@ -50,6 +53,7 @@ type CommentRepo interface {
 	AddComment(ctx context.Context, comment *entity.Comment) (err error)
 	RemoveComment(ctx context.Context, commentID string) (err error)
 	UpdateCommentContent(ctx context.Context, commentID string, original string, parsedText string) (err error)
+	UpdateCommentStatus(ctx context.Context, commentID string, status int) (err error)
 	GetComment(ctx context.Context, commentID string) (comment *entity.Comment, exist bool, err error)
 	GetCommentPage(ctx context.Context, commentQuery *CommentQuery) (
 		comments []*entity.Comment, total int64, err error)
@@ -88,6 +92,7 @@ type CommentService struct {
 	externalNotificationQueueService notice_queue.ExternalNotificationQueueService
 	activityQueueService             activity_queue.ActivityQueueService
 	eventQueueService                event_queue.EventQueueService
+	reviewService                    *review.ReviewService
 }
 
 // NewCommentService new comment service
@@ -103,6 +108,7 @@ func NewCommentService(
 	externalNotificationQueueService notice_queue.ExternalNotificationQueueService,
 	activityQueueService activity_queue.ActivityQueueService,
 	eventQueueService event_queue.EventQueueService,
+	reviewService *review.ReviewService,
 ) *CommentService {
 	return &CommentService{
 		commentRepo:                      commentRepo,
@@ -116,6 +122,7 @@ func NewCommentService(
 		externalNotificationQueueService: externalNotificationQueueService,
 		activityQueueService:             activityQueueService,
 		eventQueueService:                eventQueueService,
+		reviewService:                    reviewService,
 	}
 }
 
@@ -160,47 +167,54 @@ func (cs *CommentService) AddComment(ctx context.Context, req *schema.AddComment
 		return nil, err
 	}
 
+	comment.Status = cs.reviewService.AddCommentReview(ctx, comment, req.IP, req.UserAgent)
+	if err := cs.commentRepo.UpdateCommentStatus(ctx, comment.ID, comment.Status); err != nil {
+		return nil, err
+	}
+
 	resp = &schema.GetCommentResp{}
 	resp.SetFromComment(comment)
 	resp.MemberActions = permission.GetCommentPermission(ctx, req.UserID, resp.UserID,
 		time.Now(), req.CanEdit, req.CanDelete)
 
-	commentResp, err := cs.addCommentNotification(ctx, req, resp, comment, objInfo)
-	if err != nil {
-		return commentResp, err
-	}
+	if comment.Status != entity.CommentStatusDeleted {
+		commentResp, err := cs.addCommentNotification(ctx, req, resp, comment, objInfo)
+		if err != nil {
+			return commentResp, err
+		}
 
-	// get user info
-	userInfo, exist, err := cs.userCommon.GetUserBasicInfoByID(ctx, resp.UserID)
-	if err != nil {
-		return nil, err
-	}
-	if exist {
-		resp.Username = userInfo.Username
-		resp.UserDisplayName = userInfo.DisplayName
-		resp.UserAvatar = userInfo.Avatar
-		resp.UserStatus = userInfo.Status
-	}
+		// get user info
+		userInfo, exist, err := cs.userCommon.GetUserBasicInfoByID(ctx, resp.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if exist {
+			resp.Username = userInfo.Username
+			resp.UserDisplayName = userInfo.DisplayName
+			resp.UserAvatar = userInfo.Avatar
+			resp.UserStatus = userInfo.Status
+		}
 
-	activityMsg := &schema.ActivityMsg{
-		UserID:           comment.UserID,
-		ObjectID:         comment.ID,
-		OriginalObjectID: req.ObjectID,
-		ActivityTypeKey:  constant.ActQuestionCommented,
+		activityMsg := &schema.ActivityMsg{
+			UserID:           comment.UserID,
+			ObjectID:         comment.ID,
+			OriginalObjectID: req.ObjectID,
+			ActivityTypeKey:  constant.ActQuestionCommented,
+		}
+		var event *schema.EventMsg
+		switch objInfo.ObjectType {
+		case constant.QuestionObjectType:
+			activityMsg.ActivityTypeKey = constant.ActQuestionCommented
+			event = schema.NewEvent(constant.EventCommentCreate, req.UserID).TID(comment.ID).
+				CID(comment.ID, comment.UserID).QID(objInfo.QuestionID, objInfo.ObjectCreatorUserID)
+		case constant.AnswerObjectType:
+			activityMsg.ActivityTypeKey = constant.ActAnswerCommented
+			event = schema.NewEvent(constant.EventCommentCreate, req.UserID).TID(comment.ID).
+				CID(comment.ID, comment.UserID).AID(objInfo.AnswerID, objInfo.ObjectCreatorUserID)
+		}
+		cs.activityQueueService.Send(ctx, activityMsg)
+		cs.eventQueueService.Send(ctx, event)
 	}
-	var event *schema.EventMsg
-	switch objInfo.ObjectType {
-	case constant.QuestionObjectType:
-		activityMsg.ActivityTypeKey = constant.ActQuestionCommented
-		event = schema.NewEvent(constant.EventCommentCreate, req.UserID).TID(comment.ID).
-			CID(comment.ID, comment.UserID).QID(objInfo.QuestionID, objInfo.ObjectCreatorUserID)
-	case constant.AnswerObjectType:
-		activityMsg.ActivityTypeKey = constant.ActAnswerCommented
-		event = schema.NewEvent(constant.EventCommentCreate, req.UserID).TID(comment.ID).
-			CID(comment.ID, comment.UserID).AID(objInfo.AnswerID, objInfo.ObjectCreatorUserID)
-	}
-	cs.activityQueueService.Send(ctx, activityMsg)
-	cs.eventQueueService.Send(ctx, event)
 	return resp, nil
 }
 
